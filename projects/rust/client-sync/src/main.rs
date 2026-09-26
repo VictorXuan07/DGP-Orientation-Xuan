@@ -28,13 +28,14 @@ fn input(prompt: &str) -> io::Result<String> {
     }
     Ok(line.trim_end_matches(['\r', '\n']).to_owned())//删除末尾的换行符和回车符，to_owned()方法把&str转换为String类型，方便返回。
 }
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> { //result<T,E>意思是：如果函数执行成功，返回Ok(T)，如果失败，返回Err(E)。
+//这里的T是()，表示没有返回值(main正常执行完毕)，E是Box<dyn std::error::Error>，表示可以返回任何实现了std::error::Error trait的错误类型。
     let args = Args::parse();
-    let client = Client::builder()
-        .timeout(Duration::from_secs(12))
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
+    let client = Client::builder() //创建客户端
+        .timeout(Duration::from_secs(12)) //设置超时时间为12秒
+        .no_proxy() //不使用代理(直接连接目标服务器)：使结果更可控，避免被环境改变不知道是代理的问题还是server的问题。
+        .redirect(reqwest::redirect::Policy::none()) //不跟随重定向，让程序直接看到最开始的相应结果，而不是被重定向后的结果。因为有些服务器会返回302重定向，客户端默认会跟随重定向，这样就看不到最初的响应了。
+        .build()?; //build()方法返回Result<Client, reqwest::Error>，?表示如果返回Err，就直接返回这个错误。
     let mut token = String::new();
     loop {
         let command = match input(
@@ -45,10 +46,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => return Err(error.into()),
         };
         let mut body = Value::Null;
-        let (method, path) = match command.as_str() {
+        let (method, path) = match command.as_str() { //as_str()方法把String转换为&str，方便匹配
             "q" => break,
-            "ping" => ("GET", "/ping"),
-            "list" => ("GET", "/texts"),
+            "ping" => ("GET", "/ping"), //这个ping不是指网络ping，是服务器自己定义的，用于测试server是否活着
+            "list" => ("GET", "/texts"), 
             "logout" => ("DELETE", "/sessions/current"),
             "register" | "login" => {
                 body = json!({"username": input("username: ")?, "password": rpassword::prompt_password("password: ")?});
@@ -70,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         };
-        let result = rm_client_sync::exchange(
+        let result = rm_client_sync::exchange( //调用的exchange位于lib.rs里
             &client,
             &args.url,
             method.parse().unwrap(),
