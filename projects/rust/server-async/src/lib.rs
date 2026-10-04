@@ -10,6 +10,7 @@ use subtle::ConstantTimeEq;
 
 pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/ping"),
+    ("POST", "/echo"),
     ("POST", "/users"),
     ("POST", "/sessions"),
     ("DELETE", "/sessions/current"),
@@ -80,6 +81,19 @@ impl Service {
         }
         if method == "GET" && path == "/ping" {
             return (200, json!({"data": "pong"}));
+        }
+        if method == "POST" && path == "/echo" {
+            let Some(text) = body.get("text").and_then(Value::as_str) else {
+                return error(400, "Expected text string");
+            };
+            if body.as_object().map(|fields| fields.len()) != Some(1) {
+                return error(400, "Expected only text field");
+            }
+            // String length counts UTF-8 bytes, as required by the text limit.
+            if text.len() > 65_536 {
+                return error(413, "Text too large");
+            }
+            return (200, json!({"data": text}));
         }
         if method == "POST" && matches!(path, "/users" | "/sessions") {
             let Some(name) = body.get("username").and_then(Value::as_str) else {

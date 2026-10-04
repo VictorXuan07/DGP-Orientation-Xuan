@@ -2,6 +2,49 @@ use rm_server_async::Service;
 use serde_json::{Value, json};
 
 #[test]
+fn echo_preserves_text_and_enforces_byte_limit() {
+    let service = Service::default();
+    for text in [
+        "".to_owned(),
+        " 你好\nRM\n ".to_owned(),
+        "😀".repeat(16_384),
+    ] {
+        assert_eq!(
+            service.handle("POST", "/echo", &json!({"text": text}), ""),
+            (200, json!({"data": text}))
+        );
+    }
+    for text in ["a".repeat(65_537), format!("{}a", "😀".repeat(16_384))] {
+        assert_eq!(
+            service
+                .handle("POST", "/echo", &json!({"text": text}), "")
+                .0,
+            413
+        );
+    }
+    assert!(service.users.lock().unwrap().is_empty());
+}
+
+#[test]
+fn echo_requires_exactly_one_string_field() {
+    let service = Service::default();
+    for body in [
+        Value::Null,
+        json!([]),
+        json!("text"),
+        json!({}),
+        json!({"text": null}),
+        json!({"text": 42}),
+        json!({"text": true}),
+        json!({"text": []}),
+        json!({"text": {}}),
+        json!({"text": "hello", "extra": "field"}),
+    ] {
+        assert_eq!(service.handle("POST", "/echo", &body, "").0, 400, "{body}");
+    }
+}
+
+#[test]
 fn input_validation_and_baseline() {
     let service = Service::default();
     assert_eq!(

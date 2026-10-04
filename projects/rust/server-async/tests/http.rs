@@ -4,6 +4,80 @@ use rocket::local::blocking::Client;
 use serde_json::{Value, json};
 
 #[test]
+fn http_echo_preserves_text_and_checks_input() {
+    let client = Client::tracked(create_app()).unwrap();
+    for text in [
+        "".to_owned(),
+        " 你好\nRM\n ".to_owned(),
+        "😀".repeat(16_384),
+    ] {
+        let response = client
+            .post("/echo")
+            .header(ContentType::JSON)
+            .body(json!({"text": text}).to_string())
+            .dispatch();
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.content_type(), Some(ContentType::JSON));
+        assert_eq!(
+            response.into_json::<Value>().unwrap(),
+            json!({"data": text})
+        );
+    }
+    for body in [
+        "not JSON",
+        "[]",
+        "{}",
+        r#"{"text":42}"#,
+        r#"{"text":"hello","extra":true}"#,
+        r#"{"text":"\uD800"}"#,
+    ] {
+        assert_eq!(
+            client
+                .post("/echo")
+                .header(ContentType::JSON)
+                .body(body)
+                .dispatch()
+                .status(),
+            Status::BadRequest,
+            "{body}"
+        );
+    }
+    assert_eq!(
+        client
+            .post("/echo")
+            .header(ContentType::JSON)
+            .body(json!({"text": "a".repeat(65_537)}).to_string())
+            .dispatch()
+            .status(),
+        Status::PayloadTooLarge
+    );
+    // JSON escapes enlarge the wire body without enlarging the decoded text.
+    let escaped = format!(r#"{{"text":"{}"}}"#, "\\u0000".repeat(65_536));
+    let exact = format!("{escaped}{}", " ".repeat(524_288 - escaped.len()));
+    let response = client
+        .post("/echo")
+        .header(ContentType::JSON)
+        .body(&exact)
+        .dispatch();
+    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(
+        response.into_json::<Value>().unwrap(),
+        json!({"data": "\0".repeat(65_536)})
+    );
+    assert_eq!(
+        client
+            .post("/echo")
+            .header(ContentType::JSON)
+            .body(format!("{exact} "))
+            .dispatch()
+            .status(),
+        Status::PayloadTooLarge
+    );
+    // A rejected request must not prevent subsequent requests from succeeding.
+    assert_eq!(client.get("/ping").dispatch().status(), Status::Ok);
+}
+
+#[test]
 fn http_account_lifecycle() {
     let client = Client::tracked(create_app()).unwrap();
     let ping = client.get("/ping").dispatch();
@@ -98,7 +172,10 @@ fn http_input_and_routing() {
         Status::BadRequest
     );
     assert_eq!(client.get("/missing").dispatch().status(), Status::NotFound);
-    assert_eq!(client.get("/echo").dispatch().status(), Status::NotFound);
+    assert_eq!(
+        client.get("/echo").dispatch().status(),
+        Status::MethodNotAllowed
+    );
     assert_eq!(
         client.patch("/ping").dispatch().status(),
         Status::MethodNotAllowed
@@ -110,7 +187,6 @@ fn unimplemented_routes_are_absent() {
     use rocket::http::Method;
     let client = Client::tracked(create_app()).unwrap();
     for (method, path) in [
-        (Method::Post, "/echo"),
         (Method::Delete, "/users/me"),
         (Method::Put, "/texts/note"),
         (Method::Get, "/texts/note"),
@@ -123,6 +199,7 @@ fn unimplemented_routes_are_absent() {
     }
     for path in [
         "/ping",
+        "/echo",
         "/users",
         "/sessions",
         "/sessions/current",

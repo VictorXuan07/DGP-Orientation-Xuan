@@ -52,8 +52,8 @@ struct Dispatch(Arc<Service>);
 #[rocket::async_trait]
 impl Handler for Dispatch {
     async fn handle<'r>(&self, request: &'r Request<'_>, data: Data<'r>) -> Outcome<'r> {
-        let method = request.method().as_str().to_owned();  //获取method
-        let path = request.uri().path().as_str().to_owned();  //获取path
+        let method = request.method().as_str().to_owned(); //获取method
+        let path = request.uri().path().as_str().to_owned(); //获取path
         if let Some(status) = route_error(&method, &path) {
             return Outcome::from(
                 request,
