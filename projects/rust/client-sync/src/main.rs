@@ -1,46 +1,32 @@
-use clap::Parser; //处理命令行参数
-use reqwest::blocking::Client; //用于发送HTTP请求
-use serde_json::{Value, json}; //用于处理JSON数据
-use std::io::{self, Write}; //用于处理输入输出，self表示把io本身也引入，后面可以不用再加std；
-//write是一个trait，提供了flush方法，用于刷新缓冲区，暂时还没有完全理解
-use std::time::Duration; //时间，这里大概是用来处理网络超时的问题
+use clap::Parser;
+use reqwest::blocking::Client;
+use serde_json::{Value, json};
+use std::io::{self, Write};
+use std::time::Duration;
 
-#[derive(Parser)] //#[derive(...)]是attribute(属性)，表示请编译器/宏系统帮这个类型自动生成某些能力。
-//Parser是clap提供的一个宏，用于自动生成命令行参数解析的代码
-//宏(marco)：像代码生成器，我写的代码交给宏，宏展开生成新的代码，新的代码再交给编译器编译。宏的作用是减少重复代码，提高开发效率。
-//它的样子是：xxx!
-//而clap的Parser宏是一个derive宏，它的样子是：#[derive(Parser)]，它的作用是为结构体生成命令行参数解析的代码。
+#[derive(Parser)]
 
-// 结构体struct和class类似，但rust会把数据和方法分开，struct只负责存储数据，方法需要单独实现（impl）
-struct Args
-//定义一个结构体Args，用于存储命令行参数，和Java的那个args差不多
-{
+struct Args {
     #[arg(long, default_value = "http://127.0.0.1:7878")]
-    //告诉clap下面这个 url 字段应该如何对应命令行参数。
-    //long表示这个参数是一个长选项，将输入的url转化为--url。
     url: String,
 }
 
-//input()的作用：在终端显示提示文字 → 等待用户输入一行 → 去掉末尾换行符 → 把用户输入的字符串返回。
 fn input(prompt: &str) -> io::Result<String> {
-    print!("{prompt}"); //print!宏和println!宏类似，区别是print!宏不换行。prompt可能会被放到缓冲区不能保证输出。
-    io::stdout().flush()?; //flush()方法会把缓冲区的内容立即输出到终端，?表示如果flush()返回错误，就直接返回这个错误。
-    let mut line = String::new(); //let:声明一个可变变量；mut：可变变量；String::new():创建一个空的字符串，
-    //不能使用&str，因为&str是不可变的字符串切片，不能存储用户输入的内容。
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut line = String::new();
     if io::stdin().read_line(&mut line)? == 0 {
-        //把 line 的可变引用交给 read_line()，允许它修改这个 String。
-        //read_line()的返回值是读取的字节数，如果为0，说明用户输入了EOF（End Of File），也就是Ctrl+D。
-        return Err(io::ErrorKind::UnexpectedEof.into()); //into()方法把io::ErrorKind::UnexpectedEof转换为io::Error类型，方便返回错误。
+        return Err(io::ErrorKind::UnexpectedEof.into());
     }
-    Ok(line.trim_end_matches(['\r', '\n']).to_owned()) //删除末尾的换行符和回车符，to_owned()方法把&str转换为String类型，方便返回。
+    Ok(line.trim_end_matches(['\r', '\n']).to_owned())
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let client = Client::builder() //创建客户端
-        .timeout(Duration::from_secs(12)) //设置超时时间为12秒
-        .no_proxy() //不使用代理(直接连接目标服务器)：使结果更可控，避免被环境改变不知道是代理的问题还是server的问题。
-        .redirect(reqwest::redirect::Policy::none()) //不跟随重定向，让程序直接看到最开始的相应结果，而不是被重定向后的结果。因为有些服务器会返回302重定向，客户端默认会跟随重定向，这样就看不到最初的响应了。
-        .build()?; //build()方法返回Result<Client, reqwest::Error>，?表示如果返回Err，就直接返回这个错误。
+    let client = Client::builder()
+        .timeout(Duration::from_secs(12))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
     let mut token = String::new();
     loop {
         let command = match input(
@@ -51,11 +37,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => return Err(error.into()),
         };
         let mut body = Value::Null;
-        // methods that are not realized: "echo" | "delete-user" | "put" | "get" | "delete"
         let (method, path) = match command.as_str() {
-            //as_str()方法把String转换为&str，方便匹配
             "q" => break,
-            "ping" => ("GET", "/ping"), //这个ping不是指网络ping，是服务器自己定义的，用于测试server是否活着
+            "ping" => ("GET", "/ping"),
             "list" => ("GET", "/texts"),
             "logout" => ("DELETE", "/sessions/current"),
             "register" | "login" => {
@@ -71,15 +55,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "echo" => {
                 body = json!({"text": input("text: ")?});
-                (
-                    "POST","/echo"
-                )
+                ("POST", "/echo")
             }
-            "put" =>{
+            "put" => {
                 body = json!({"text": input("text: ")?});
-                (
-                    "PUT", "/texts"
-                )
+                ("PUT", "/texts")
             }
             _ => {
                 println!("Unknown command.");
@@ -87,7 +67,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         let result: Result<(u16, Value), reqwest::Error> = rm_client_sync::exchange(
-            //调用的exchange位于lib.rs里
             &client,
             &args.url,
             method.parse().unwrap(),
