@@ -7,7 +7,7 @@ use std::time::Duration; //时间，这里大概是用来处理网络超时的�
 
 #[derive(Parser)] //#[derive(...)]是attribute(属性)，表示请编译器/宏系统帮这个类型自动生成某些能力。
 //Parser是clap提供的一个宏，用于自动生成命令行参数解析的代码
-//宏(macro)：像代码生成器，我写的代码交给宏，宏展开生成新的代码，新的代码再交给编译器编译。宏的作用是减少重复代码，提高开发效率。
+//宏(marco)：像代码生成器，我写的代码交给宏，宏展开生成新的代码，新的代码再交给编译器编译。宏的作用是减少重复代码，提高开发效率。
 //它的样子是：xxx!
 //而clap的Parser宏是一个derive宏，它的样子是：#[derive(Parser)]，它的作用是为结构体生成命令行参数解析的代码。
 
@@ -51,6 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => return Err(error.into()),
         };
         let mut body = Value::Null;
+        // methods that are not realized: "echo" | "delete-user" | "put" | "get" | "delete"
         let (method, path) = match command.as_str() {
             //as_str()方法把String转换为&str，方便匹配
             "q" => break,
@@ -68,16 +69,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                 )
             }
-            "echo" | "delete-user" | "put" | "get" | "delete" => {
-                println!("This task is not implemented in the starting code yet.");
-                continue;
+            "echo" => {
+                body = json!({"text": input("text: ")?});
+                (
+                    "POST","/echo"
+                )
+            }
+            "put" =>{
+                body = json!({"text": input("text: ")?});
+                (
+                    "PUT", "/texts"
+                )
             }
             _ => {
                 println!("Unknown command.");
                 continue;
             }
         };
-        let result = rm_client_sync::exchange(
+        let result: Result<(u16, Value), reqwest::Error> = rm_client_sync::exchange(
             //调用的exchange位于lib.rs里
             &client,
             &args.url,

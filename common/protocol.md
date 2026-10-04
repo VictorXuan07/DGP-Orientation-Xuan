@@ -33,7 +33,7 @@
 公开。请求为对象，包含字符串 `username`、`password`。成功为 201，`data` 为仅含字符串 `username` 的对象，值为注册的用户名；注册不会自动登录。字段不合法返回 400，用户名已存在返回 409。
 
 示例：
-
+[text](protocol.md)
 - 请求 `POST /users`，体 `{"username":"alice","password":"password1"}` → 201，响应 `{"data":{"username":"alice"}}`。
 
 ### `POST /sessions`：登录
