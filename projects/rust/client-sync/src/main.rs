@@ -54,7 +54,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
             }
             "echo" => {
-                body = json!({"text": input("text: ")?});
+                println!("Enter text: '.' ends; '.end' ends without the final newline.");
+                println!("For a text line starting with '.', add one extra '.' prefix.");
+                let text = match rm_client_sync::read_multiline(&mut io::stdin().lock()) {
+                    Ok(text) => text,
+                    Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+                    Err(error) => return Err(error.into()),
+                };
+                body = json!({"text": text});
                 ("POST", "/echo")
             }
             "put" => {

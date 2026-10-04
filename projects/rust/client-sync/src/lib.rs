@@ -24,3 +24,33 @@ pub fn exchange(
         serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({"message": text}));
     Ok((status, value))
 }
+
+/// Read dot-escaped lines; `.` ends, `.end` removes the final line ending.
+pub fn read_multiline(reader: &mut impl std::io::BufRead) -> std::io::Result<String> {
+    let mut text = String::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        let command = line.strip_suffix('\n').unwrap_or(&line);
+        let command = command.strip_suffix('\r').unwrap_or(command);
+        if command == "." {
+            return Ok(text);
+        }
+        if command == ".end" {
+            if text.ends_with('\n') {
+                text.pop();
+                if text.ends_with('\r') {
+                    text.pop();
+                }
+            }
+            return Ok(text);
+        }
+        if line.starts_with("..") {
+            text.push_str(&line[1..]);
+        } else {
+            text.push_str(&line);
+        }
+    }
+}
