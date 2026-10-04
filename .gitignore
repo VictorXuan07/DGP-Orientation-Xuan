@@ -15,3 +15,4 @@ rm-projects-rust-*/
 
 # Local-only build output.
 .reference-build/
+projects/rust/server-async/Note.md
