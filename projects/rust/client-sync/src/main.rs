@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 body = json!({"text": input("text: ")?});
                 ("POST", "/echo")
             }
-            "put" => {
+            "put" | "get" => {
                 let name = input("name: ")?;
                 if name.is_empty()
                     || name.len() > 64
@@ -69,9 +69,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Name must be 1-64 ASCII letters, digits, '_' or '-'.");
                     continue;
                 }
-                body = json!({"text": input("text: ")?});
                 text_path = format!("/texts/{name}");
-                ("PUT", text_path.as_str())
+                if command == "put" {
+                    body = json!({"text": input("text: ")?});
+                    ("PUT", text_path.as_str())
+                } else {
+                    ("GET", text_path.as_str())
+                }
             }
             _ => {
                 println!("Unknown command.");
