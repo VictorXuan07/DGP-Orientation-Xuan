@@ -24,12 +24,76 @@ fn put_text_creates_and_overwrites_for_current_user() {
             (200, json!({"data": null}))
         );
         assert_eq!(service.users.lock().unwrap()["alice"].texts["note-1"], text);
+        assert_eq!(
+            service.handle("GET", "/texts/note-1", &Value::Null, &authorization),
+            (200, json!({"data": text}))
+        );
     }
 
     assert_eq!(
         service.handle("GET", "/texts", &Value::Null, &authorization),
         (200, json!({"data": ["note-1"]}))
     );
+}
+
+#[test]
+fn get_text_validates_identity_name_and_user_isolation() {
+    let service = Service::default();
+    let alice = register_and_login(&service, "alice");
+    let bob = register_and_login(&service, "bob");
+    let path = format!("/texts/{}", "a".repeat(64));
+    assert_eq!(
+        service
+            .handle("PUT", &path, &json!({"text": "alice text"}), &alice)
+            .0,
+        200
+    );
+    assert_eq!(service.handle("GET", &path, &Value::Null, &bob).0, 404);
+    assert_eq!(
+        service
+            .handle("PUT", &path, &json!({"text": "bob text"}), &bob)
+            .0,
+        200
+    );
+    for (token, expected) in [(&alice, "alice text"), (&bob, "bob text")] {
+        assert_eq!(
+            service.handle("GET", &path, &Value::Null, token),
+            (200, json!({"data": expected}))
+        );
+    }
+    for token in ["", "Bearer invalid", "invalid"] {
+        assert_eq!(service.handle("GET", &path, &Value::Null, token).0, 401);
+    }
+    for path in [
+        "/texts/",
+        "/texts/a/b",
+        "/texts/bad.name",
+        "/texts/你好",
+        &format!("/texts/{}", "a".repeat(65)),
+    ] {
+        assert_eq!(
+            service.handle("GET", path, &Value::Null, &alice).0,
+            400,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        service
+            .handle("GET", "/texts/missing", &Value::Null, &alice)
+            .0,
+        404
+    );
+    assert_eq!(
+        service.handle("GET", "/texts/A", &Value::Null, &alice).0,
+        404
+    );
+    assert_eq!(
+        service
+            .handle("DELETE", "/sessions/current", &Value::Null, &alice)
+            .0,
+        200
+    );
+    assert_eq!(service.handle("GET", &path, &Value::Null, &alice).0, 401);
 }
 
 #[test]

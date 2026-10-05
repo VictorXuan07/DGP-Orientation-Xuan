@@ -151,7 +151,7 @@ fn http_put_text_creates_and_overwrites() {
         .unwrap();
     let authorization = format!("Bearer {}", login["data"]["token"].as_str().unwrap());
 
-    for text in ["first", "你好\nRM\n"] {
+    for text in ["first", "你好\nRM\n", ""] {
         let response = client
             .put("/texts/note")
             .header(ContentType::JSON)
@@ -163,7 +163,34 @@ fn http_put_text_creates_and_overwrites() {
             response.into_json::<Value>().unwrap(),
             json!({"data": null})
         );
+        let response = client
+            .get("/texts/note")
+            .header(Header::new("Authorization", authorization.clone()))
+            .dispatch();
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.content_type(), Some(ContentType::JSON));
+        assert_eq!(
+            response.into_json::<Value>().unwrap(),
+            json!({"data": text})
+        );
     }
+    for (path, expected) in [
+        ("/texts/missing", Status::NotFound),
+        ("/texts/bad.name", Status::BadRequest),
+    ] {
+        assert_eq!(
+            client
+                .get(path)
+                .header(Header::new("Authorization", authorization.clone()))
+                .dispatch()
+                .status(),
+            expected
+        );
+    }
+    assert_eq!(
+        client.get("/texts/note").dispatch().status(),
+        Status::Unauthorized
+    );
     let list = client
         .get("/texts")
         .header(Header::new("Authorization", authorization))
@@ -244,12 +271,10 @@ fn unimplemented_routes_are_absent() {
         client.put("/texts/note").dispatch().status(),
         Status::BadRequest
     );
-    for method in [Method::Get, Method::Delete] {
-        assert_eq!(
-            client.req(method, "/texts/note").dispatch().status(),
-            Status::MethodNotAllowed
-        );
-    }
+    assert_eq!(
+        client.delete("/texts/note").dispatch().status(),
+        Status::MethodNotAllowed
+    );
     for path in [
         "/ping",
         "/echo",
