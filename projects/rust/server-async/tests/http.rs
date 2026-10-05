@@ -130,6 +130,51 @@ fn http_account_lifecycle() {
 }
 
 #[test]
+fn http_put_text_creates_and_overwrites() {
+    let client = Client::tracked(create_app()).unwrap();
+    let account = json!({"username": "alice", "password": "password1"}).to_string();
+    assert_eq!(
+        client
+            .post("/users")
+            .header(ContentType::JSON)
+            .body(&account)
+            .dispatch()
+            .status(),
+        Status::Created
+    );
+    let login = client
+        .post("/sessions")
+        .header(ContentType::JSON)
+        .body(&account)
+        .dispatch()
+        .into_json::<Value>()
+        .unwrap();
+    let authorization = format!("Bearer {}", login["data"]["token"].as_str().unwrap());
+
+    for text in ["first", "你好\nRM\n"] {
+        let response = client
+            .put("/texts/note")
+            .header(ContentType::JSON)
+            .header(Header::new("Authorization", authorization.clone()))
+            .body(json!({"text": text}).to_string())
+            .dispatch();
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(
+            response.into_json::<Value>().unwrap(),
+            json!({"data": null})
+        );
+    }
+    let list = client
+        .get("/texts")
+        .header(Header::new("Authorization", authorization))
+        .dispatch();
+    assert_eq!(
+        list.into_json::<Value>().unwrap(),
+        json!({"data": ["note"]})
+    );
+}
+
+#[test]
 fn http_input_and_routing() {
     let client = Client::tracked(create_app()).unwrap();
     for body in [b"not JSON".to_vec(), vec![0xff], b"NaN".to_vec()] {
@@ -188,13 +233,21 @@ fn unimplemented_routes_are_absent() {
     let client = Client::tracked(create_app()).unwrap();
     for (method, path) in [
         (Method::Delete, "/users/me"),
-        (Method::Put, "/texts/note"),
-        (Method::Get, "/texts/note"),
-        (Method::Delete, "/texts/note"),
+        (Method::Get, "/not-implemented"),
     ] {
         assert_eq!(
             client.req(method, path).dispatch().status(),
             Status::NotFound
+        );
+    }
+    assert_eq!(
+        client.put("/texts/note").dispatch().status(),
+        Status::BadRequest
+    );
+    for method in [Method::Get, Method::Delete] {
+        assert_eq!(
+            client.req(method, "/texts/note").dispatch().status(),
+            Status::MethodNotAllowed
         );
     }
     for path in [
@@ -204,6 +257,7 @@ fn unimplemented_routes_are_absent() {
         "/sessions",
         "/sessions/current",
         "/texts",
+        "/texts/note",
     ] {
         assert_eq!(
             client.patch(path).dispatch().status(),

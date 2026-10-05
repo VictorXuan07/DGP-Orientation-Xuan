@@ -1,6 +1,88 @@
 use rm_server_async::Service;
 use serde_json::{Value, json};
 
+fn register_and_login(service: &Service, username: &str) -> String {
+    let account = json!({"username": username, "password": "password1"});
+    assert_eq!(service.handle("POST", "/users", &account, "").0, 201);
+    let response = service.handle("POST", "/sessions", &account, "").1;
+    format!("Bearer {}", response["data"]["token"].as_str().unwrap())
+}
+
+#[test]
+fn put_text_creates_and_overwrites_for_current_user() {
+    let service = Service::default();
+    let authorization = register_and_login(&service, "alice");
+
+    for text in ["", "你好\nRM\n", &"😀".repeat(16_384)] {
+        assert_eq!(
+            service.handle(
+                "PUT",
+                "/texts/note-1",
+                &json!({"text": text}),
+                &authorization,
+            ),
+            (200, json!({"data": null}))
+        );
+        assert_eq!(service.users.lock().unwrap()["alice"].texts["note-1"], text);
+    }
+
+    assert_eq!(
+        service.handle("GET", "/texts", &Value::Null, &authorization),
+        (200, json!({"data": ["note-1"]}))
+    );
+}
+
+#[test]
+fn put_text_validates_auth_name_body_and_size() {
+    let service = Service::default();
+    let authorization = register_and_login(&service, "alice");
+    assert_eq!(
+        service
+            .handle("PUT", "/texts/note", &json!({"text": "ok"}), "")
+            .0,
+        401
+    );
+    for path in [
+        "/texts/",
+        "/texts/a/b",
+        "/texts/你好",
+        &format!("/texts/{}", "a".repeat(65)),
+    ] {
+        assert_eq!(
+            service
+                .handle("PUT", path, &json!({"text": "ok"}), &authorization)
+                .0,
+            400,
+            "{path}"
+        );
+    }
+    for body in [
+        Value::Null,
+        json!({}),
+        json!({"text": 1}),
+        json!({"text": "ok", "extra": true}),
+    ] {
+        assert_eq!(
+            service
+                .handle("PUT", "/texts/note", &body, &authorization)
+                .0,
+            400,
+            "{body}"
+        );
+    }
+    assert_eq!(
+        service
+            .handle(
+                "PUT",
+                "/texts/note",
+                &json!({"text": "a".repeat(65_537)}),
+                &authorization,
+            )
+            .0,
+        413
+    );
+}
+
 #[test]
 fn echo_preserves_text_and_enforces_byte_limit() {
     let service = Service::default();

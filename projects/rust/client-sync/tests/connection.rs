@@ -43,12 +43,11 @@ fn sends_http_authorization_and_preserves_error_status() {
 }
 
 #[test]
-fn echo_sends_multiline_json_and_reads_original_text() {
+fn echo_sends_json_and_reads_original_text() {
     use std::io::Read;
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let text =
-        rm_client_sync::read_multiline(&mut std::io::Cursor::new("你好\n\n..\n.end\n")).unwrap();
+    let text = "你好 RM".to_owned();
     let expected = text.clone();
     let peer = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();

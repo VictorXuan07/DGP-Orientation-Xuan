@@ -15,9 +15,13 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/sessions"),
     ("DELETE", "/sessions/current"),
     ("GET", "/texts"),
+    ("PUT", "/texts/{name}"),
 ];
 
 pub fn route_error(method: &str, path: &str) -> Option<u16> {
+    if path.starts_with("/texts/") {
+        return (method != "PUT").then_some(405);
+    }
     match ROUTES.iter().find(|(_, route)| *route == path) {
         None => Some(404),
         Some((allowed, _)) if *allowed != method => Some(405),
@@ -95,6 +99,18 @@ impl Service {
             }
             return (200, json!({"data": text}));
         }
+        if method == "PUT" && path.starts_with("/texts/") {
+            let name = &path["/texts/".len()..];
+            let Some(text) = body.get("text").and_then(Value::as_str) else {
+                return error(400, "Expected text string");
+            };
+            if !valid_name(name, 64) || body.as_object().map(|fields| fields.len()) != Some(1) {
+                return error(400, "Invalid text fields");
+            }
+            if text.len() > 65_536 {
+                return error(413, "Text too large");
+            }
+        }
         if method == "POST" && matches!(path, "/users" | "/sessions") {
             let Some(name) = body.get("username").and_then(Value::as_str) else {
                 return error(400, "Expected username");
@@ -147,7 +163,8 @@ impl Service {
             // Later server task: record a deadline and include expires_in.
             return (200, json!({"data": {"token": token}}));
         }
-        let protected = matches!(path, "/texts" | "/sessions/current");
+        let protected = matches!(path, "/texts" | "/sessions/current")
+            || method == "PUT" && path.starts_with("/texts/");
         if protected {
             let token = authorization.strip_prefix("Bearer ").unwrap_or("");
             let mut users = self.users.lock().unwrap();
@@ -166,6 +183,12 @@ impl Service {
             }
             if method == "GET" && path == "/texts" {
                 return (200, json!({"data": user.texts.keys().collect::<Vec<_>>()}));
+            }
+            if method == "PUT" && path.starts_with("/texts/") {
+                let name = &path["/texts/".len()..];
+                let text = body["text"].as_str().unwrap();
+                user.texts.insert(name.to_owned(), text.to_owned());
+                return (200, json!({"data": null}));
             }
         }
         error(404, "Not found")
