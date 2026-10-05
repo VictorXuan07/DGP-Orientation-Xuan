@@ -37,6 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => return Err(error.into()),
         };
         let mut body = Value::Null;
+        let text_path;
         let (method, path) = match command.as_str() {
             "q" => break,
             "ping" => ("GET", "/ping"),
@@ -58,8 +59,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("POST", "/echo")
             }
             "put" => {
+                let name = input("name: ")?;
+                if name.is_empty()
+                    || name.len() > 64
+                    || !name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                {
+                    println!("Name must be 1-64 ASCII letters, digits, '_' or '-'.");
+                    continue;
+                }
                 body = json!({"text": input("text: ")?});
-                ("PUT", "/texts")
+                text_path = format!("/texts/{name}");
+                ("PUT", text_path.as_str())
             }
             _ => {
                 println!("Unknown command.");
