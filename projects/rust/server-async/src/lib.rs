@@ -14,6 +14,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/users"),
     ("POST", "/sessions"),
     ("DELETE", "/sessions/current"),
+    ("DELETE", "/users/me"),
     ("GET", "/texts"),
     ("PUT", "/texts/{name}"),
     ("GET", "/texts/{name}"),
@@ -68,6 +69,26 @@ fn new_token() -> String {
 }
 
 impl Service {
+    fn finish_login(
+        &self,
+        name: &str,
+        salt: [u8; 16],
+        expected: [u8; 32],
+        digest: [u8; 32],
+    ) -> (u16, Value) {
+        let mut users = self.users.lock().unwrap();
+        let Some(user) = users.get_mut(name) else {
+            return error(401, "Invalid username or password");
+        };
+        if user.salt != salt || !bool::from(digest.ct_eq(&expected)) {
+            return error(401, "Invalid username or password");
+        }
+        let token = new_token();
+        user.token = Some(token.clone());
+        // Later server task: record a deadline and include expires_in.
+        (200, json!({"data": {"token": token}}))
+    }
+
     pub fn handle(
         &self,
         method: &str,
@@ -159,19 +180,9 @@ impl Service {
                 (user.salt, user.digest)
             };
             let digest = password_hash(password, &salt);
-            let mut users = self.users.lock().unwrap();
-            let Some(user) = users.get_mut(name) else {
-                return error(401, "Invalid username or password");
-            };
-            if user.salt != salt || !bool::from(digest.ct_eq(&expected)) {
-                return error(401, "Invalid username or password");
-            }
-            let token = new_token();
-            user.token = Some(token.clone());
-            // Later server task: record a deadline and include expires_in.
-            return (200, json!({"data": {"token": token}}));
+            return self.finish_login(name, salt, expected, digest);
         }
-        let protected = matches!(path, "/texts" | "/sessions/current")
+        let protected = matches!(path, "/texts" | "/sessions/current" | "/users/me")
             || matches!(method, "PUT" | "GET" | "DELETE") && path.starts_with("/texts/");
         if protected {
             let token = authorization.strip_prefix("Bearer ").unwrap_or("");
@@ -183,6 +194,10 @@ impl Service {
             let Some(name) = name else {
                 return error(401, "Login required");
             };
+            if method == "DELETE" && path == "/users/me" {
+                users.remove(&name);
+                return (200, json!({"data": null}));
+            }
             let user = users.get_mut(&name).unwrap();
             // Later server task: check expiry and keep authorization and state mutation atomic.
             if method == "DELETE" && path == "/sessions/current" {
@@ -220,6 +235,36 @@ impl Service {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pending_old_login_cannot_change_reregistered_account() {
+        let service = Service::default();
+        let account = json!({"username": "alice", "password": "password1"});
+        assert_eq!(service.handle("POST", "/users", &account, "").0, 201);
+        let login = service.handle("POST", "/sessions", &account, "").1;
+        let token = format!("Bearer {}", login["data"]["token"].as_str().unwrap());
+        // Capture the first phase of an old account's pending login.
+        let (salt, expected) = {
+            let users = service.users.lock().unwrap();
+            (users["alice"].salt, users["alice"].digest)
+        };
+        let digest = password_hash("password1", &salt);
+        assert_eq!(
+            service
+                .handle("DELETE", "/users/me", &Value::Null, &token)
+                .0,
+            200
+        );
+        assert_eq!(service.finish_login("alice", salt, expected, digest).0, 401);
+        assert_eq!(service.handle("POST", "/users", &account, "").0, 201);
+        let login = service.handle("POST", "/sessions", &account, "");
+        assert_eq!(login.0, 200);
+        let new_token = login.1["data"]["token"].as_str().unwrap();
+        assert_eq!(service.finish_login("alice", salt, expected, digest).0, 401);
+        assert_eq!(
+            service.users.lock().unwrap()["alice"].token.as_deref(),
+            Some(new_token)
+        );
+    }
     #[test]
     fn account_lifecycle() {
         let service = Service::default();

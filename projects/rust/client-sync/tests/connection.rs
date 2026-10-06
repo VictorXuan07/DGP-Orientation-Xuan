@@ -6,6 +6,72 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 #[test]
+fn delete_user_command_sends_no_body_and_keeps_command_loop_running() {
+    use std::process::{Command, Stdio};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let peer = std::thread::spawn(move || {
+        for (method, path, status, response) in [
+            ("DELETE", "/users/me", "200 OK", json!({"data": null})),
+            (
+                "DELETE",
+                "/users/me",
+                "401 Unauthorized",
+                json!({"message": "Login required"}),
+            ),
+            ("GET", "/ping", "200 OK", json!({"data": "pong"})),
+        ] {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(line, format!("{method} {path} HTTP/1.1\r\n"));
+            loop {
+                line.clear();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                let header = line.to_ascii_lowercase();
+                if let Some(value) = header.strip_prefix("content-length:") {
+                    assert_eq!(value.trim(), "0");
+                }
+                assert!(!header.starts_with("transfer-encoding:"));
+                assert!(!header.starts_with("authorization:"));
+            }
+            let response = response.to_string();
+            write!(reader.get_mut(), "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+        }
+    });
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rm-client-sync"))
+        .args(["--url", &url])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"delete-user\ndelete-user\nping\nq\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    peer.join().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("200 {\"data\":null}"));
+    assert!(stdout.contains("401"));
+    assert!(stdout.contains("Please log in again."));
+    assert!(stdout.contains("pong"));
+    assert!(!stdout.contains("Unknown command"));
+}
+
+#[test]
 fn get_and_delete_commands_send_no_body_and_continue_after_errors() {
     use std::process::{Command, Stdio};
 

@@ -305,17 +305,15 @@ fn http_input_and_routing() {
 
 #[test]
 fn unimplemented_routes_are_absent() {
-    use rocket::http::Method;
     let client = Client::tracked(create_app()).unwrap();
-    for (method, path) in [
-        (Method::Delete, "/users/me"),
-        (Method::Get, "/not-implemented"),
-    ] {
-        assert_eq!(
-            client.req(method, path).dispatch().status(),
-            Status::NotFound
-        );
-    }
+    assert_eq!(
+        client.get("/not-implemented").dispatch().status(),
+        Status::NotFound
+    );
+    assert_eq!(
+        client.delete("/users/me").dispatch().status(),
+        Status::Unauthorized
+    );
     assert_eq!(
         client.put("/texts/note").dispatch().status(),
         Status::BadRequest
@@ -332,10 +330,83 @@ fn unimplemented_routes_are_absent() {
         "/sessions/current",
         "/texts",
         "/texts/note",
+        "/users/me",
     ] {
         assert_eq!(
             client.patch(path).dispatch().status(),
             Status::MethodNotAllowed
+        );
+    }
+}
+
+#[test]
+fn http_account_deletion_allows_clean_reregistration() {
+    let client = Client::tracked(create_app()).unwrap();
+    let account = json!({"username": "alice", "password": "password1"}).to_string();
+    for generation in 0..2 {
+        assert_eq!(
+            client
+                .post("/users")
+                .header(ContentType::JSON)
+                .body(&account)
+                .dispatch()
+                .status(),
+            Status::Created
+        );
+        let response = client
+            .post("/sessions")
+            .header(ContentType::JSON)
+            .body(&account)
+            .dispatch();
+        assert_eq!(response.status(), Status::Ok);
+        let login = response.into_json::<Value>().unwrap();
+        let token = format!("Bearer {}", login["data"]["token"].as_str().unwrap());
+        assert_eq!(
+            client
+                .get("/texts")
+                .header(Header::new("Authorization", token.clone()))
+                .dispatch()
+                .into_json::<Value>()
+                .unwrap(),
+            json!({"data": []})
+        );
+        if generation == 0 {
+            assert_eq!(
+                client
+                    .put("/texts/note")
+                    .header(ContentType::JSON)
+                    .header(Header::new("Authorization", token.clone()))
+                    .body(json!({"text": "hello"}).to_string())
+                    .dispatch()
+                    .status(),
+                Status::Ok
+            );
+        }
+        let response = client
+            .delete("/users/me")
+            .header(Header::new("Authorization", token.clone()))
+            .dispatch();
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.content_type(), Some(ContentType::JSON));
+        assert_eq!(
+            response.into_json::<Value>().unwrap(),
+            json!({"data": null})
+        );
+        assert_eq!(
+            client
+                .get("/texts")
+                .header(Header::new("Authorization", token.clone()))
+                .dispatch()
+                .status(),
+            Status::Unauthorized
+        );
+        assert_eq!(
+            client
+                .delete("/users/me")
+                .header(Header::new("Authorization", token))
+                .dispatch()
+                .status(),
+            Status::Unauthorized
         );
     }
 }

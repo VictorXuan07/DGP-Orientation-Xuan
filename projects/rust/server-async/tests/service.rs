@@ -9,6 +9,92 @@ fn register_and_login(service: &Service, username: &str) -> String {
 }
 
 #[test]
+fn delete_account_cleans_data_and_revokes_old_identity() {
+    let service = Service::default();
+    let alice = register_and_login(&service, "alice");
+    let bob = register_and_login(&service, "bob");
+    for token in [&alice, &bob] {
+        assert_eq!(
+            service
+                .handle("PUT", "/texts/note", &json!({"text": "hello"}), token)
+                .0,
+            200
+        );
+    }
+    for token in ["", "Bearer invalid"] {
+        assert_eq!(
+            service.handle("DELETE", "/users/me", &Value::Null, token).0,
+            401
+        );
+    }
+    assert_eq!(
+        service.handle("DELETE", "/users/me", &Value::Null, &alice),
+        (200, json!({"data": null}))
+    );
+    assert!(!service.users.lock().unwrap().contains_key("alice"));
+    assert_eq!(
+        service
+            .handle("DELETE", "/users/me", &Value::Null, &alice)
+            .0,
+        401
+    );
+    let account = json!({"username": "alice", "password": "password1"});
+    assert_eq!(service.handle("POST", "/sessions", &account, "").0, 401);
+    let new_alice = register_and_login(&service, "alice");
+    for (method, path, body) in [
+        ("GET", "/texts", Value::Null),
+        ("GET", "/texts/note", Value::Null),
+        ("PUT", "/texts/note", json!({"text": "old write"})),
+        ("DELETE", "/texts/note", Value::Null),
+        ("DELETE", "/sessions/current", Value::Null),
+        ("DELETE", "/users/me", Value::Null),
+    ] {
+        assert_eq!(service.handle(method, path, &body, &alice).0, 401);
+    }
+    assert_eq!(
+        service.handle("GET", "/texts", &Value::Null, &new_alice),
+        (200, json!({"data": []}))
+    );
+    assert_eq!(
+        service.handle("GET", "/texts/note", &Value::Null, &bob),
+        (200, json!({"data": "hello"}))
+    );
+}
+
+#[test]
+fn account_deletion_and_text_write_remain_consistent() {
+    let service = std::sync::Arc::new(Service::default());
+    let token = register_and_login(&service, "alice");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let worker = {
+        let service = service.clone();
+        let token = token.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            service
+                .handle("PUT", "/texts/note", &json!({"text": "race"}), &token)
+                .0
+        })
+    };
+    barrier.wait();
+    assert_eq!(
+        service
+            .handle("DELETE", "/users/me", &Value::Null, &token)
+            .0,
+        200
+    );
+    assert!(matches!(worker.join().unwrap(), 200 | 401));
+    assert!(!service.users.lock().unwrap().contains_key("alice"));
+    assert_eq!(
+        service
+            .handle("PUT", "/texts/note", &json!({"text": "late"}), &token)
+            .0,
+        401
+    );
+}
+
+#[test]
 fn delete_text_updates_list_and_preserves_other_users() {
     let service = Service::default();
     let alice = register_and_login(&service, "alice");
