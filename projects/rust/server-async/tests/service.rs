@@ -490,3 +490,117 @@ fn concurrent_registration_has_one_winner() {
     assert_eq!(statuses.iter().filter(|&&s| s == 201).count(), 1);
     assert_eq!(statuses.iter().filter(|&&s| s == 409).count(), 3);
 }
+
+#[test]
+fn login_replacement_and_text_operations_have_consistent_results() {
+    use std::sync::{Arc, Barrier};
+
+    for method in ["GET", "PUT", "DELETE"] {
+        let service = Arc::new(Service::default());
+        let old = register_and_login(&service, "alice");
+        let bob = register_and_login(&service, "bob");
+        for token in [&old, &bob] {
+            assert_eq!(
+                service
+                    .handle("PUT", "/texts/note", &json!({"text": "before"}), token)
+                    .0,
+                200
+            );
+        }
+        let barrier = Arc::new(Barrier::new(2));
+        let worker = {
+            let service = service.clone();
+            let old = old.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                service.handle(method, "/texts/note", &json!({"text": "after"}), &old)
+            })
+        };
+        barrier.wait();
+        let login = service.handle(
+            "POST",
+            "/sessions",
+            &json!({"username": "alice", "password": "password1"}),
+            "",
+        );
+        assert_eq!(login.0, 200);
+        let next = format!("Bearer {}", login.1["data"]["token"].as_str().unwrap());
+        let result = worker.join().unwrap();
+        assert!(matches!(result.0, 200 | 401), "{method}: {result:?}");
+        if method == "GET" && result.0 == 200 {
+            assert_eq!(result.1, json!({"data": "before"}));
+        }
+        let expected = match (method, result.0) {
+            ("DELETE", 200) => (404, None),
+            ("PUT", 200) => (200, Some("after")),
+            _ => (200, Some("before")),
+        };
+        let read = service.handle("GET", "/texts/note", &Value::Null, &next);
+        assert_eq!(read.0, expected.0);
+        if let Some(text) = expected.1 {
+            assert_eq!(read.1, json!({"data": text}));
+        }
+        assert_eq!(
+            service.handle("GET", "/texts", &Value::Null, &next).1,
+            if expected.1.is_some() {
+                json!({"data": ["note"]})
+            } else {
+                json!({"data": []})
+            }
+        );
+        for (method, body) in [
+            ("GET", Value::Null),
+            ("PUT", json!({"text": "late"})),
+            ("DELETE", Value::Null),
+        ] {
+            assert_eq!(service.handle(method, "/texts/note", &body, &old).0, 401);
+        }
+        assert_eq!(
+            service.handle("GET", "/texts/note", &Value::Null, &bob),
+            (200, json!({"data": "before"}))
+        );
+        assert_eq!(service.handle("GET", "/ping", &Value::Null, "").0, 200);
+    }
+}
+
+#[test]
+fn concurrent_logins_leave_exactly_one_token_valid() {
+    use std::sync::{Arc, Barrier};
+
+    let service = Arc::new(Service::default());
+    let old = register_and_login(&service, "alice");
+    let barrier = Arc::new(Barrier::new(3));
+    let workers: Vec<_> = (0..2)
+        .map(|_| {
+            let service = service.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                service.handle(
+                    "POST",
+                    "/sessions",
+                    &json!({"username": "alice", "password": "password1"}),
+                    "",
+                )
+            })
+        })
+        .collect();
+    barrier.wait();
+    let tokens: Vec<_> = workers
+        .into_iter()
+        .map(|worker| {
+            let login = worker.join().unwrap();
+            assert_eq!(login.0, 200);
+            format!("Bearer {}", login.1["data"]["token"].as_str().unwrap())
+        })
+        .collect();
+    assert_ne!(tokens[0], tokens[1]);
+    let mut statuses: Vec<_> = tokens
+        .iter()
+        .map(|token| service.handle("GET", "/texts", &Value::Null, token).0)
+        .collect();
+    statuses.sort_unstable();
+    assert_eq!(statuses, [200, 401]);
+    assert_eq!(service.handle("GET", "/texts", &Value::Null, &old).0, 401);
+}
