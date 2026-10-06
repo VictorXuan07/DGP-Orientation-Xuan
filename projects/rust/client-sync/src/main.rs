@@ -37,6 +37,12 @@ fn handle_response(command: &str, status: u16, value: &Value, token: &mut String
     }
 }
 
+fn input_text() -> io::Result<String> {
+    println!("Enter text: '.' ends; '.end' ends without the final newline.");
+    println!("For a text line starting with '.', add one extra '.' prefix.");
+    rm_client_sync::read_multiline(&mut io::stdin().lock())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let client = Client::builder()
@@ -73,7 +79,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
             }
             "echo" => {
-                body = json!({"text": input("text: ")?});
+                let text = match input_text() {
+                    Ok(text) => text,
+                    Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+                    Err(error) => return Err(error.into()),
+                };
+                body = json!({"text": text});
                 ("POST", "/echo")
             }
             "put" | "get" | "delete" => {
@@ -89,7 +100,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 text_path = format!("/texts/{name}");
                 if command == "put" {
-                    body = json!({"text": input("text: ")?});
+                    let text = match input_text() {
+                        Ok(text) => text,
+                        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+                        Err(error) => return Err(error.into()),
+                    };
+                    body = json!({"text": text});
                     ("PUT", text_path.as_str())
                 } else if command == "get" {
                     ("GET", text_path.as_str())

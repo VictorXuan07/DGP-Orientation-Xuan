@@ -1,5 +1,39 @@
 use reqwest::{Method, blocking::Client};
 use serde_json::Value;
+use std::io::{self, BufRead};
+
+/// `.` ends input; `.end` also removes the final line ending.
+/// Prefix a dot-starting body line with an extra dot.
+pub fn read_multiline(reader: &mut impl BufRead) -> io::Result<String> {
+    let mut text = String::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        let command = line.strip_suffix('\n').unwrap_or(&line);
+        let command = command.strip_suffix('\r').unwrap_or(command);
+        match command {
+            "." => return Ok(text),
+            ".end" => {
+                if text.ends_with('\n') {
+                    text.pop();
+                    if text.ends_with('\r') {
+                        text.pop();
+                    }
+                }
+                return Ok(text);
+            }
+            _ => {
+                if line.starts_with("..") {
+                    text.push_str(&line[1..]);
+                } else {
+                    text.push_str(&line);
+                }
+            }
+        }
+    }
+}
 
 /// Preserve HTTP status even when the error body is not JSON.
 pub fn exchange(

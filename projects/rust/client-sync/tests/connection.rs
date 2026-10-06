@@ -6,6 +6,88 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 #[test]
+fn multiline_echo_and_put_send_exact_json_and_resume_commands() {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let peer = std::thread::spawn(move || {
+        for (method, path, text) in [
+            ("POST", "/echo", Some("你好\n\n.\n.end\n")),
+            ("PUT", "/texts/note", Some("你好\nRM")),
+            ("POST", "/echo", Some("")),
+            ("GET", "/ping", None),
+        ] {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(line, format!("{method} {path} HTTP/1.1\r\n"));
+            let mut length = 0;
+            let mut json_content_type = false;
+            loop {
+                line.clear();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                let header = line.to_ascii_lowercase();
+                if let Some(value) = header.strip_prefix("content-length:") {
+                    length = value.trim().parse::<usize>().unwrap();
+                }
+                json_content_type |= header.trim() == "content-type: application/json";
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            if let Some(text) = text {
+                assert!(json_content_type);
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                    json!({"text": text})
+                );
+            } else {
+                assert!(body.is_empty());
+            }
+            let response = if path == "/echo" {
+                json!({"data": text.unwrap()})
+            } else if method == "PUT" {
+                json!({"data": null})
+            } else {
+                json!({"data": "pong"})
+            }
+            .to_string();
+            write!(reader.get_mut(), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+        }
+        listener
+    });
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rm-client-sync"))
+        .args(["--url", &url])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all("echo\n你好\n\n..\n..end\n.\nput\nnote\n你好\nRM\n.end\necho\n.end\nping\necho\nunfinished\n".as_bytes()).unwrap();
+    let output = child.wait_with_output().unwrap();
+    let listener = peer.join().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(&format!("200 {}", json!({"data": "你好\n\n.\n.end\n"}))));
+    assert!(stdout.contains("200 {\"data\":\"\"}"));
+    assert!(stdout.contains("pong"));
+    assert!(!stdout.contains("Unknown command"));
+}
+
+#[test]
 fn delete_user_command_sends_no_body_and_keeps_command_loop_running() {
     use std::process::{Command, Stdio};
 
@@ -208,7 +290,7 @@ fn put_command_validates_name_sends_text_and_handles_unauthorized() {
         .stdin
         .take()
         .unwrap()
-        .write_all("put\nbad/name\nput\nnote-1\n你好 RM\nq\n".as_bytes())
+        .write_all("put\nbad/name\nput\nnote-1\n你好 RM\n.end\nq\n".as_bytes())
         .unwrap();
     let output = child.wait_with_output().unwrap();
     peer.join().unwrap();
