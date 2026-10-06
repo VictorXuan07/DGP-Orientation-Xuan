@@ -193,12 +193,61 @@ fn http_put_text_creates_and_overwrites() {
     );
     let list = client
         .get("/texts")
-        .header(Header::new("Authorization", authorization))
+        .header(Header::new("Authorization", authorization.clone()))
         .dispatch();
     assert_eq!(
         list.into_json::<Value>().unwrap(),
         json!({"data": ["note"]})
     );
+    for (path, expected) in [
+        ("/texts/bad.name", Status::BadRequest),
+        ("/texts/missing", Status::NotFound),
+    ] {
+        assert_eq!(
+            client
+                .delete(path)
+                .header(Header::new("Authorization", authorization.clone()))
+                .dispatch()
+                .status(),
+            expected
+        );
+    }
+    assert_eq!(
+        client.delete("/texts/note").dispatch().status(),
+        Status::Unauthorized
+    );
+    let response = client
+        .delete("/texts/note")
+        .header(Header::new("Authorization", authorization.clone()))
+        .dispatch();
+    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.content_type(), Some(ContentType::JSON));
+    assert_eq!(
+        response.into_json::<Value>().unwrap(),
+        json!({"data": null})
+    );
+    assert_eq!(
+        client
+            .get("/texts/note")
+            .header(Header::new("Authorization", authorization.clone()))
+            .dispatch()
+            .status(),
+        Status::NotFound
+    );
+    assert_eq!(
+        client
+            .delete("/texts/note")
+            .header(Header::new("Authorization", authorization.clone()))
+            .dispatch()
+            .status(),
+        Status::NotFound
+    );
+    let response = client
+        .get("/texts")
+        .header(Header::new("Authorization", authorization))
+        .dispatch();
+    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.into_json::<Value>().unwrap(), json!({"data": []}));
 }
 
 #[test]
@@ -273,7 +322,7 @@ fn unimplemented_routes_are_absent() {
     );
     assert_eq!(
         client.delete("/texts/note").dispatch().status(),
-        Status::MethodNotAllowed
+        Status::Unauthorized
     );
     for path in [
         "/ping",

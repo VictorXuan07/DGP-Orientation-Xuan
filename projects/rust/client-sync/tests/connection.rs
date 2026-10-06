@@ -6,21 +6,36 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 #[test]
-fn get_command_reads_text_and_continues_after_errors() {
+fn get_and_delete_commands_send_no_body_and_continue_after_errors() {
     use std::process::{Command, Stdio};
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let peer = std::thread::spawn(move || {
-        for (name, status, response) in [
-            ("note", "200 OK", json!({"data": "你好\nRM"})),
-            ("empty", "200 OK", json!({"data": ""})),
+        for (method, name, status, response) in [
+            ("GET", "note", "200 OK", json!({"data": "你好\nRM"})),
+            ("GET", "empty", "200 OK", json!({"data": ""})),
             (
+                "GET",
                 "missing",
                 "404 Not Found",
                 json!({"message": "Text not found"}),
             ),
             (
+                "GET",
+                "note",
+                "401 Unauthorized",
+                json!({"message": "Login required"}),
+            ),
+            ("DELETE", "note", "200 OK", json!({"data": null})),
+            (
+                "DELETE",
+                "note",
+                "404 Not Found",
+                json!({"message": "Text not found"}),
+            ),
+            (
+                "DELETE",
                 "note",
                 "401 Unauthorized",
                 json!({"message": "Login required"}),
@@ -33,7 +48,7 @@ fn get_command_reads_text_and_continues_after_errors() {
             let mut reader = BufReader::new(stream);
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
-            assert_eq!(line, format!("GET /texts/{name} HTTP/1.1\r\n"));
+            assert_eq!(line, format!("{method} /texts/{name} HTTP/1.1\r\n"));
             loop {
                 line.clear();
                 assert!(reader.read_line(&mut line).unwrap() > 0);
@@ -61,7 +76,7 @@ fn get_command_reads_text_and_continues_after_errors() {
         .stdin
         .take()
         .unwrap()
-        .write_all("get\nbad/name\nget\nnote\nget\nempty\nget\nmissing\nget\nnote\nq\n".as_bytes())
+        .write_all("get\nbad/name\nget\nnote\nget\nempty\nget\nmissing\nget\nnote\ndelete\nbad/name\ndelete\nnote\ndelete\nnote\ndelete\nnote\nq\n".as_bytes())
         .unwrap();
     let output = child.wait_with_output().unwrap();
     peer.join().unwrap();
@@ -70,6 +85,7 @@ fn get_command_reads_text_and_continues_after_errors() {
     assert!(stdout.contains("Name must be 1-64"));
     assert!(stdout.contains(&format!("200 {}", json!({"data": "你好\nRM"}))));
     assert!(stdout.contains(&format!("200 {}", json!({"data": ""}))));
+    assert!(stdout.contains(&format!("200 {}", json!({"data": null}))));
     assert!(stdout.contains("404"));
     assert!(stdout.contains("401"));
     assert!(stdout.contains("Please log in again."));

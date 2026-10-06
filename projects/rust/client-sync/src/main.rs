@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 body = json!({"text": input("text: ")?});
                 ("POST", "/echo")
             }
-            "put" | "get" => {
+            "put" | "get" | "delete" => {
                 let name = input("name: ")?;
                 if name.is_empty()
                     || name.len() > 64
@@ -73,8 +73,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if command == "put" {
                     body = json!({"text": input("text: ")?});
                     ("PUT", text_path.as_str())
-                } else {
+                } else if command == "get" {
                     ("GET", text_path.as_str())
+                } else {
+                    ("DELETE", text_path.as_str())
                 }
             }
             _ => {

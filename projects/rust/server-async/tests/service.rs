@@ -9,6 +9,109 @@ fn register_and_login(service: &Service, username: &str) -> String {
 }
 
 #[test]
+fn delete_text_updates_list_and_preserves_other_users() {
+    let service = Service::default();
+    let alice = register_and_login(&service, "alice");
+    let bob = register_and_login(&service, "bob");
+    for (token, text) in [(&alice, ""), (&bob, "bob text")] {
+        assert_eq!(
+            service
+                .handle("PUT", "/texts/note", &json!({"text": text}), token)
+                .0,
+            200
+        );
+    }
+    assert_eq!(
+        service
+            .handle("PUT", "/texts/z", &json!({"text": "keep"}), &alice)
+            .0,
+        200
+    );
+    assert_eq!(
+        service.handle("GET", "/texts", &Value::Null, &alice),
+        (200, json!({"data": ["note", "z"]}))
+    );
+    assert_eq!(
+        service.handle("DELETE", "/texts/note", &Value::Null, &alice),
+        (200, json!({"data": null}))
+    );
+    assert_eq!(
+        service.handle("GET", "/texts/note", &Value::Null, &alice).0,
+        404
+    );
+    assert_eq!(
+        service
+            .handle("DELETE", "/texts/note", &Value::Null, &alice)
+            .0,
+        404
+    );
+    assert_eq!(
+        service.handle("GET", "/texts", &Value::Null, &alice),
+        (200, json!({"data": ["z"]}))
+    );
+    assert_eq!(
+        service.handle("GET", "/texts/note", &Value::Null, &bob),
+        (200, json!({"data": "bob text"}))
+    );
+    for token in ["", "Bearer invalid"] {
+        assert_eq!(
+            service.handle("DELETE", "/texts/z", &Value::Null, token).0,
+            401
+        );
+    }
+    for path in [
+        "/texts/",
+        "/texts/a/b",
+        "/texts/bad.name",
+        "/texts/你好",
+        &format!("/texts/{}", "a".repeat(65)),
+    ] {
+        assert_eq!(service.handle("DELETE", path, &Value::Null, &alice).0, 400);
+    }
+    assert_eq!(
+        service.handle("GET", "/texts/z", &Value::Null, &alice),
+        (200, json!({"data": "keep"}))
+    );
+    assert_eq!(
+        service.handle("DELETE", "/texts/z", &Value::Null, &alice).0,
+        200
+    );
+    assert_eq!(
+        service.handle("GET", "/texts", &Value::Null, &alice),
+        (200, json!({"data": []}))
+    );
+}
+
+#[test]
+fn concurrent_deletion_has_one_success() {
+    let service = std::sync::Arc::new(Service::default());
+    let token = register_and_login(&service, "alice");
+    assert_eq!(
+        service
+            .handle("PUT", "/texts/note", &json!({"text": "hello"}), &token)
+            .0,
+        200
+    );
+    let workers: Vec<_> = (0..4)
+        .map(|_| {
+            let service = service.clone();
+            let token = token.clone();
+            std::thread::spawn(move || {
+                service
+                    .handle("DELETE", "/texts/note", &Value::Null, &token)
+                    .0
+            })
+        })
+        .collect();
+    let statuses: Vec<_> = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect();
+    assert_eq!(statuses.iter().filter(|&&status| status == 200).count(), 1);
+    assert_eq!(statuses.iter().filter(|&&status| status == 404).count(), 3);
+}
+
+#[test]
 fn put_text_creates_and_overwrites_for_current_user() {
     let service = Service::default();
     let authorization = register_and_login(&service, "alice");

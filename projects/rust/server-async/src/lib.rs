@@ -17,11 +17,12 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/texts"),
     ("PUT", "/texts/{name}"),
     ("GET", "/texts/{name}"),
+    ("DELETE", "/texts/{name}"),
 ];
 
 pub fn route_error(method: &str, path: &str) -> Option<u16> {
     if path.starts_with("/texts/") {
-        return (!matches!(method, "PUT" | "GET")).then_some(405);
+        return (!matches!(method, "PUT" | "GET" | "DELETE")).then_some(405);
     }
     match ROUTES.iter().find(|(_, route)| *route == path) {
         None => Some(404),
@@ -100,7 +101,7 @@ impl Service {
             }
             return (200, json!({"data": text}));
         }
-        if method == "GET" && path.starts_with("/texts/") {
+        if matches!(method, "GET" | "DELETE") && path.starts_with("/texts/") {
             let name = &path["/texts/".len()..];
             if !valid_name(name, 64) {
                 return error(400, "Invalid text name");
@@ -171,7 +172,7 @@ impl Service {
             return (200, json!({"data": {"token": token}}));
         }
         let protected = matches!(path, "/texts" | "/sessions/current")
-            || matches!(method, "PUT" | "GET") && path.starts_with("/texts/");
+            || matches!(method, "PUT" | "GET" | "DELETE") && path.starts_with("/texts/");
         if protected {
             let token = authorization.strip_prefix("Bearer ").unwrap_or("");
             let mut users = self.users.lock().unwrap();
@@ -203,6 +204,13 @@ impl Service {
                     return error(404, "Text not found");
                 };
                 return (200, json!({"data": text}));
+            }
+            if method == "DELETE" && path.starts_with("/texts/") {
+                let name = &path["/texts/".len()..];
+                if user.texts.remove(name).is_none() {
+                    return error(404, "Text not found");
+                }
+                return (200, json!({"data": null}));
             }
         }
         error(404, "Not found")
