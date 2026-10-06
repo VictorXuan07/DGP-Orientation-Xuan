@@ -5,7 +5,9 @@ use rand::{RngCore, rngs::OsRng};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 
 pub const ROUTES: &[(&str, &str)] = &[
@@ -36,12 +38,29 @@ pub struct User {
     pub salt: [u8; 16],
     pub digest: [u8; 32],
     pub token: Option<String>,
+    pub token_issued_at: Option<Instant>,
     pub texts: BTreeMap<String, String>,
 }
 
-#[derive(Default)]
 pub struct Service {
     pub users: Mutex<BTreeMap<String, User>>,
+    token_ttl_seconds: NonZeroU64,
+}
+
+impl Default for Service {
+    fn default() -> Self {
+        Self::new(NonZeroU64::new(300).unwrap())
+    }
+}
+
+impl User {
+    fn accepts_token(&self, token: &str, now: Instant, ttl: Duration) -> bool {
+        !token.is_empty()
+            && self.token.as_deref() == Some(token)
+            && self
+                .token_issued_at
+                .is_some_and(|issued| now.duration_since(issued) < ttl)
+    }
 }
 
 pub fn error(status: u16, message: &str) -> (u16, Value) {
@@ -69,6 +88,13 @@ fn new_token() -> String {
 }
 
 impl Service {
+    pub fn new(token_ttl_seconds: NonZeroU64) -> Self {
+        Self {
+            users: Mutex::new(BTreeMap::new()),
+            token_ttl_seconds,
+        }
+    }
+
     fn finish_login(
         &self,
         name: &str,
@@ -85,8 +111,11 @@ impl Service {
         }
         let token = new_token();
         user.token = Some(token.clone());
-        // Later server task: record a deadline and include expires_in.
-        (200, json!({"data": {"token": token}}))
+        user.token_issued_at = Some(Instant::now());
+        (
+            200,
+            json!({"data": {"token": token, "expires_in": self.token_ttl_seconds.get()}}),
+        )
     }
 
     pub fn handle(
@@ -167,6 +196,7 @@ impl Service {
                         salt,
                         digest,
                         token: None,
+                        token_issued_at: None,
                         texts: BTreeMap::new(),
                     },
                 );
@@ -187,9 +217,11 @@ impl Service {
         if protected {
             let token = authorization.strip_prefix("Bearer ").unwrap_or("");
             let mut users = self.users.lock().unwrap();
+            let now = Instant::now();
+            let ttl = Duration::from_secs(self.token_ttl_seconds.get());
             let name = users
                 .iter()
-                .find(|(_, user)| !token.is_empty() && user.token.as_deref() == Some(token))
+                .find(|(_, user)| user.accepts_token(token, now, ttl))
                 .map(|(name, _)| name.clone());
             let Some(name) = name else {
                 return error(401, "Login required");
@@ -199,9 +231,9 @@ impl Service {
                 return (200, json!({"data": null}));
             }
             let user = users.get_mut(&name).unwrap();
-            // Later server task: check expiry and keep authorization and state mutation atomic.
             if method == "DELETE" && path == "/sessions/current" {
                 user.token = None;
+                user.token_issued_at = None;
                 return (200, json!({"data": null}));
             }
             if method == "GET" && path == "/texts" {
@@ -235,6 +267,23 @@ impl Service {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn token_is_invalid_at_the_exact_expiry_boundary() {
+        let issued = Instant::now();
+        let user = User {
+            salt: [0; 16],
+            digest: [0; 32],
+            token: Some("sample".into()),
+            token_issued_at: Some(issued),
+            texts: BTreeMap::new(),
+        };
+        let ttl = Duration::from_secs(1);
+        assert!(user.accepts_token("sample", issued, ttl));
+        assert!(user.accepts_token("sample", issued + ttl - Duration::from_nanos(1), ttl));
+        assert!(!user.accepts_token("sample", issued + ttl, ttl));
+        assert!(!user.accepts_token("sample", issued + ttl + Duration::from_nanos(1), ttl));
+    }
+
     #[test]
     fn pending_old_login_cannot_change_reregistered_account() {
         let service = Service::default();

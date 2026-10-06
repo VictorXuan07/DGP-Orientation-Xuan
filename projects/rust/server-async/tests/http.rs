@@ -4,6 +4,75 @@ use rocket::local::blocking::Client;
 use serde_json::{Value, json};
 
 #[test]
+fn http_token_ttl_reaches_login_and_all_protected_routes() {
+    use rm_server_async::{Service, http::create_app_with_service};
+    use rocket::http::Method;
+    use std::num::NonZeroU64;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let service = Arc::new(Service::new(NonZeroU64::new(60).unwrap()));
+    let client = Client::tracked(create_app_with_service(service.clone())).unwrap();
+    let account = json!({"username": "alice", "password": "password1"}).to_string();
+    assert_eq!(
+        client
+            .post("/users")
+            .header(ContentType::JSON)
+            .body(&account)
+            .dispatch()
+            .status(),
+        Status::Created
+    );
+    let response = client
+        .post("/sessions")
+        .header(ContentType::JSON)
+        .body(&account)
+        .dispatch();
+    assert_eq!(response.status(), Status::Ok);
+    let login = response.into_json::<Value>().unwrap();
+    assert_eq!(login["data"]["expires_in"], 60);
+    let token = format!("Bearer {}", login["data"]["token"].as_str().unwrap());
+    assert_eq!(
+        client
+            .get("/texts")
+            .header(Header::new("Authorization", token.clone()))
+            .dispatch()
+            .status(),
+        Status::Ok
+    );
+    service
+        .users
+        .lock()
+        .unwrap()
+        .get_mut("alice")
+        .unwrap()
+        .token_issued_at = Some(Instant::now() - Duration::from_secs(60));
+    for (method, path) in [
+        (Method::Get, "/texts"),
+        (Method::Get, "/texts/note"),
+        (Method::Put, "/texts/note"),
+        (Method::Delete, "/texts/note"),
+        (Method::Delete, "/sessions/current"),
+        (Method::Delete, "/users/me"),
+    ] {
+        let mut request = client
+            .req(method, path)
+            .header(Header::new("Authorization", token.clone()));
+        if method == Method::Put {
+            request = request
+                .header(ContentType::JSON)
+                .body(json!({"text": "hello"}).to_string());
+        }
+        assert_eq!(
+            request.dispatch().status(),
+            Status::Unauthorized,
+            "{method} {path}"
+        );
+    }
+    assert_eq!(client.get("/ping").dispatch().status(), Status::Ok);
+}
+
+#[test]
 fn http_echo_preserves_text_and_checks_input() {
     let client = Client::tracked(create_app()).unwrap();
     for text in [
@@ -101,6 +170,7 @@ fn http_account_lifecycle() {
         .into_json::<Value>()
         .unwrap();
     let authorization = format!("Bearer {}", login["data"]["token"].as_str().unwrap());
+    assert_eq!(login["data"]["expires_in"], 300);
     let texts = client
         .get("/texts")
         .header(Header::new("Authorization", authorization.clone()))

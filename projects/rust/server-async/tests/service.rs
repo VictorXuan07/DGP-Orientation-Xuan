@@ -9,6 +9,73 @@ fn register_and_login(service: &Service, username: &str) -> String {
 }
 
 #[test]
+fn token_expiry_protects_every_route_without_extending_lifetime() {
+    use std::num::NonZeroU64;
+    use std::time::{Duration, Instant};
+
+    let service = Service::new(NonZeroU64::new(60).unwrap());
+    let token = register_and_login(&service, "alice");
+    let issued = service.users.lock().unwrap()["alice"].token_issued_at;
+    assert_eq!(
+        service
+            .handle("PUT", "/texts/note", &json!({"text": "keep"}), &token)
+            .0,
+        200
+    );
+    assert_eq!(
+        service.handle("GET", "/texts/note", &Value::Null, &token).0,
+        200
+    );
+    assert_eq!(service.handle("GET", "/texts", &Value::Null, &token).0, 200);
+    assert_eq!(
+        service.users.lock().unwrap()["alice"].token_issued_at,
+        issued
+    );
+    service
+        .users
+        .lock()
+        .unwrap()
+        .get_mut("alice")
+        .unwrap()
+        .token_issued_at = Some(Instant::now() - Duration::from_secs(60));
+    for (method, path, body) in [
+        ("GET", "/texts", Value::Null),
+        ("GET", "/texts/note", Value::Null),
+        ("PUT", "/texts/note", json!({"text": "must not overwrite"})),
+        ("DELETE", "/texts/note", Value::Null),
+        ("DELETE", "/sessions/current", Value::Null),
+        ("DELETE", "/users/me", Value::Null),
+    ] {
+        assert_eq!(
+            service.handle(method, path, &body, &token).0,
+            401,
+            "{method} {path}"
+        );
+    }
+    assert_eq!(service.users.lock().unwrap()["alice"].texts["note"], "keep");
+    assert_eq!(service.handle("GET", "/ping", &Value::Null, "").0, 200);
+    let account = json!({"username": "alice", "password": "password1"});
+    let response = service.handle("POST", "/sessions", &account, "");
+    assert_eq!(response.0, 200);
+    assert_eq!(response.1["data"]["expires_in"], 60);
+    let next = format!("Bearer {}", response.1["data"]["token"].as_str().unwrap());
+    assert_ne!(next, token);
+    assert_eq!(service.handle("GET", "/texts", &Value::Null, &token).0, 401);
+    assert_eq!(
+        service.handle("GET", "/texts/note", &Value::Null, &next),
+        (200, json!({"data": "keep"}))
+    );
+    assert_eq!(
+        service
+            .handle("DELETE", "/sessions/current", &Value::Null, &next)
+            .0,
+        200
+    );
+    assert_eq!(service.users.lock().unwrap()["alice"].token_issued_at, None);
+    assert_eq!(service.handle("GET", "/texts", &Value::Null, &next).0, 401);
+}
+
+#[test]
 fn delete_account_cleans_data_and_revokes_old_identity() {
     let service = Service::default();
     let alice = register_and_login(&service, "alice");
