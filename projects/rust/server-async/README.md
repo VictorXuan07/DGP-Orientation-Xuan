@@ -18,6 +18,8 @@
 
 HTTP 验证见[异步服务端](../../../common/tasks.md#异步服务端)。
 
+终端交互、参考程序对接、退出和重启由你按[手动测试清单](tests/reference-verification.md)操作并记录。Rust 测试继续用于业务规则、协议边界、错误恢复和并发一致性检查。
+
 ## 令牌有效期
 
 `--token-ttl-seconds` 接受正整数，默认 300 秒。例如：

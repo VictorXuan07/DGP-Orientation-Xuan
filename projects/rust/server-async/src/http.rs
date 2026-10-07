@@ -111,7 +111,7 @@ impl Handler for Dispatch {
                         ),
                     );
                 }
-            }
+            } //把json字节转化为rust的value
         } else {
             Value::Null
         };
@@ -123,7 +123,7 @@ impl Handler for Dispatch {
         .await
         .unwrap_or_else(|_| error(500, "Handler failed"));
         Outcome::from(request, (Status::new(status), Json(body)))
-    }
+    } //把业务处理交给阻塞线程，请求数据交给handle，然后返回json相应并由rocket发回客户端
 }
 
 pub fn create_app() -> Rocket<Build> {
